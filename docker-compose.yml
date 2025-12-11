@@ -1,0 +1,145 @@
+services:
+  superset:
+    build:
+      context: ./config
+      dockerfile: Dockerfile
+    container_name: superset_web
+    restart: always
+    environment:
+      - SUPERSET_SECRET_KEY=${SUPERSET_SECRET_KEY}
+      - ADMIN_USERNAME=${ADMIN_USERNAME}
+      - ADMIN_PASSWORD=${ADMIN_PASSWORD}
+      - ADMIN_EMAIL=${ADMIN_EMAIL}
+      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD}
+      - SUPERSET_DATABASE_URL=postgresql+psycopg2://superset:${POSTGRES_PASSWORD}@db:5432/superset
+      - REDIS_HOST=redis
+      - REDIS_PORT=6379
+      - SMTP_HOST=${SMTP_HOST}
+      - SMTP_PORT=${SMTP_PORT}
+      - SMTP_USER=${SMTP_USER}
+      - SMTP_PASSWORD=${SMTP_PASSWORD}
+      - SMTP_MAIL_FROM=${SMTP_MAIL_FROM}
+      - SMTP_USE_TLS=${SMTP_USE_TLS}
+      - SMTP_USE_SSL=${SMTP_USE_SSL}
+      - WEBDRIVER_BASEURL_USER_FRIENDLY=${WEBDRIVER_BASEURL_USER_FRIENDLY}
+    volumes:
+      - superset_data:/app/superset_home
+    depends_on:
+      - db
+      - redis
+    networks:
+      - superset_net
+    ports:
+      - "8088:8088"
+    command: >
+      sh -c "
+      superset db upgrade &&
+      superset init &&
+      gunicorn --workers 4 --timeout 300 --bind 0.0.0.0:8088 'superset.app:create_app()'
+      "
+
+  worker:
+    build:
+      context: ./config
+      dockerfile: Dockerfile
+    restart: always
+    user: root  
+    depends_on:
+      - redis
+      - db
+      - superset
+    environment:
+      - SUPERSET_SECRET_KEY=${SUPERSET_SECRET_KEY}
+      - ADMIN_USERNAME=${ADMIN_USERNAME}
+      - ADMIN_PASSWORD=${ADMIN_PASSWORD}
+      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD}
+      - SUPERSET_DATABASE_URL=postgresql+psycopg2://superset:${POSTGRES_PASSWORD}@db:5432/superset
+      - REDIS_HOST=redis
+      - REDIS_PORT=6379
+      - SMTP_HOST=${SMTP_HOST}
+      - SMTP_PORT=${SMTP_PORT}
+      - SMTP_USER=${SMTP_USER}
+      - SMTP_PASSWORD=${SMTP_PASSWORD}
+      - SMTP_MAIL_FROM=${SMTP_MAIL_FROM}
+      - SMTP_USE_TLS=${SMTP_USE_TLS}
+      - SMTP_USE_SSL=${SMTP_USE_SSL}
+      - WEBDRIVER_BASEURL_USER_FRIENDLY=${WEBDRIVER_BASEURL_USER_FRIENDLY}
+    networks:
+      - superset_net
+    # Recursos de worker
+    shm_size: '2gb'
+    deploy:
+      resources:
+        limits:
+          memory: 4G
+    command: >
+      celery --app=superset.tasks.celery_app:app worker 
+      -Ofair 
+      -l INFO 
+      --concurrency=2 
+      --max-tasks-per-child=50
+
+  beat:
+    build:
+      context: ./config
+      dockerfile: Dockerfile
+    container_name: superset_beat
+    restart: always
+    depends_on:
+      - redis
+      - db
+      - superset
+    environment:
+      - SUPERSET_SECRET_KEY=${SUPERSET_SECRET_KEY}
+      - ADMIN_USERNAME=${ADMIN_USERNAME}
+      - ADMIN_PASSWORD=${ADMIN_PASSWORD}
+      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD}
+      - SUPERSET_DATABASE_URL=postgresql+psycopg2://superset:${POSTGRES_PASSWORD}@db:5432/superset
+      - REDIS_HOST=redis
+      - REDIS_PORT=6379
+      - SMTP_HOST=${SMTP_HOST}
+      - SMTP_PORT=${SMTP_PORT}
+      - SMTP_USER=${SMTP_USER}
+      - SMTP_PASSWORD=${SMTP_PASSWORD}
+      - SMTP_MAIL_FROM=${SMTP_MAIL_FROM}
+      - SMTP_USE_TLS=${SMTP_USE_TLS}
+      - SMTP_USE_SSL=${SMTP_USE_SSL}
+      - WEBDRIVER_BASEURL_USER_FRIENDLY=${WEBDRIVER_BASEURL_USER_FRIENDLY}
+    networks:
+      - superset_net
+    volumes:
+      - ./beat_data:/app/beat_data
+    command: >
+      celery --app=superset.tasks.celery_app:app beat 
+      -l INFO 
+      --pidfile=/tmp/celerybeat.pid 
+      --schedule=/app/beat_data/celerybeat-schedule
+
+  db:
+    image: postgres:15
+    container_name: superset_db
+    restart: always
+    environment:
+      POSTGRES_USER: superset
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_DB: superset
+    ports:
+      - "5432:5432"
+    volumes:
+      - ./postgres_data:/var/lib/postgresql/data
+    networks:
+      - superset_net
+
+  redis:
+    image: redis:6
+    container_name: superset_redis
+    restart: always
+    networks:
+      - superset_net
+
+volumes:
+  superset_data:
+
+networks:
+  superset_net:
+    driver: bridge
